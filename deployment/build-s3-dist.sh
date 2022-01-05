@@ -35,6 +35,7 @@ source_dir="$template_dir/../src/flink-rcf-app"
 flink_app_base_name="tepFlinkAnomalyDetector-0.0.1-SNAPSHOT"
 tesim_docker_dir="$template_dir/../src/tesim-docker"
 tesim_docker_image_name="tesim-runner-01-rev-$git_revision.tar.gz"
+img_asset_dir="$template_dir/../src/flink-rcf-app"
 
 echo "------------------------------------------------------------------------------"
 echo "[Init] Clean old dist folders"
@@ -104,6 +105,8 @@ if aws s3api head-bucket --bucket "$1-$4" 2>/dev/null;
   else aws s3 mb s3://$1-$4;
 fi
 aws s3 sync . s3://$1-$4/$2/$3/$git_revision/
+aws s3 cp $img_asset_dir/arch.png s3://$1-$4/$2/$3/arch.png
+aws s3 cp $img_asset_dir/flink-graph.png s3://$1-$4/$2/$3/flink-graph.png
 
 echo "-------------------------------"
 echo "-------------------------------"

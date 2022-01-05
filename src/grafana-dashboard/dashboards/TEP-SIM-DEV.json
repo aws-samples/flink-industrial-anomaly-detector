@@ -22,7 +22,7 @@
   "fiscalYearStartMonth": 0,
   "gnetId": null,
   "graphTooltip": 0,
-  "id": 1,
+  "id": 2,
   "links": [],
   "liveNow": false,
   "panels": [
@@ -110,8 +110,8 @@
         ]
       },
       "gridPos": {
-        "h": 7,
-        "w": 24,
+        "h": 10,
+        "w": 19,
         "x": 0,
         "y": 0
       },
@@ -150,6 +150,23 @@
     },
     {
       "datasource": null,
+      "gridPos": {
+        "h": 25,
+        "w": 5,
+        "x": 19,
+        "y": 0
+      },
+      "id": 18,
+      "options": {
+        "content": "Flink anomaly detectors for industrial use cases\n================================================\n\n![Fig.1: Flink Streaming System Architecture](https://artifacts-detect-real-time-anomalies-flink-us-east-1.s3.amazonaws.com/flink-anomaly-detect/v0.1/arch.png)\n\n\n(1-6) refers to steps in Fig. 1\nAs a starting point for a realistic and data intensive measurement source we use an \nalready existing (Tennessee Eastman Process - TEP) simulation framework written in C++ \noriginally created from NIST and published as open source on GitHub \n[https://github.com/rcandell/tesim]. Our Blog repository on GitHub contains a small patch,\n which adds AWS connectivity with the SDKs and modifications to the command line arguments. \n The programs used here provided by this framework are (1) a simulation process starter \n with configurable starting conditions and timestep configs and (2) a real-time client \n which connects to the simulation and sends the simulation output data to the AWS cloud.\n  \n### TEP background\nA paper by Downs & Vogel from 1991 describes it this way: \n-\t“This chemical standard process consists of a reactor/separator/recycle arrangement \ninvolving two simultaneous gas-liquid exothermic reactions.”\n-\t“The process produces two liquid products from four reactants. Also present are an \ninert and a byproduct making a total of eight components. Two additional byproduct \nreactions also occur. The process has 12 valves available for manipulation and 41 \nmeasurements available for monitoring or control.“\nThe simulation framework used allows to control all of the 12 valve settings and produces \n41 measurement variables with varying sampling frequency.\n\n### Data ingestion\nThose 41 measurement variables, named `xmeas_1` to `xmeas_41`, are emitted by the \nreal-time client (2) as key-value JSON messages. The client code is configured to produce\n 100 messages per second. A built in C++ Kinesis SDK allows the real-time client to \n directly stream json messages to a Kinesis DataStream (3).\n\n### Stream Processing with Apache Flink\nMessages sent to Amazon Kinesis DataStream are processed in configurable batch sizes \nby an Apache Flink application, deployed in Amazon Kinesis Data Analytics. Apache Flink \nis an open-source stream processing framework, written and usable in Java or Scala, and \nas seen in Figure 3, allows the definition of various data sources \n(e.g., a Kinesis DataStream) and data sinks for storing processing results. In between \ndata can be processed by a range of operators – typically those are `mapping` and \n`reducing` functions (4). In our case we use a mapping operator where each batch of \nincoming messages is processed. As seen in `code snippet 1` we apply a custom mapping \nfunction to the raw data stream. For rapid and iterative development purposes it’s easy \nto have the complete stream processing pipeline running in a local Java/Scala IDE like \nMaven, Eclipse, IntelliJ etc. \n \n![Fig.2: Flink Execution Plan (green: streaming Data Sources; yellow: Data Sinks)](https://artifacts-detect-real-time-anomalies-flink-us-east-1.s3.amazonaws.com/flink-anomaly-detect/v0.1/flink-graph.png)\n\n```java\npublic class StreamingJob extends AnomalyDetector {\n---\n  public static DataStream<String> createKinesisSource\n    (StreamExecutionEnvironment env, \n     ParameterTool parameter)\n    {\n    // create Stream\n    return kinesisStream;\n  }\n---\n  public static void main(String[] args) {\n    // set up the execution environment\n    final StreamExecutionEnvironment env = \n      StreamExecutionEnvironment.getExecutionEnvironment();\n---\n    DataStream<List<TimestreamPoint>> mainStream =\n      createKinesisSource(env, parameter)\n      .map(new AnomalyJsonToTimestreamPayloadFn(parameter))\n      .name(\"MaptoTimestreamPayload\");\n---\n    env.execute(\"Amazon Timestream Flink Anomaly Detection Sink\");\n  }\n}\n```\ncode snippet 1: Flink Application Main Class\n\n\n### In-stream anomaly detection\nWithin the Flink `mapping` operator a statistical outlier detection (we can call it \nanomaly detection) is executed. Flink easily allows the inclusion of custom libraries\n within its operators. The library used here is published by AWS – a Random Cut Forest \n implementation available from GitHub (https://github.com/aws/random-cut-forest-by-aws ). \n Random Cut Forest is a well understood statistical method which can operate on batches \n of measurements and calculates an anomaly score for each new measurement by comparing a \n new value with a cached pool (=forest) of older values. The algorithm allows the creation\n  of grouped anomaly scores, where a set of variables is combined to calculate a single \n  anomaly score. Looking back to the simulated chemical process (TEP) we can group the \n  measurement variables into 3 process stages. a) the Reactor Feed Analysis b) the purge \n  gas analysis and c) the product analysis. Each group consists of 5 to 10 measurement \n  variables. So we’re getting anomaly scores for a, b and c. In `code snippet 2` we can \n  see how an anomaly detector is created. The class `AnomalyDetector` is instantiated \n  and extended then three times (for our 3 distinct process stages) within the mapping \n  function as seen in `code snippet 3`.\nFlink distributes this calculation across its worker nodes and handles data deduplication \nprocesses under the hood.\n\n```java\n---\npublic class AnomalyDetector {\n    protected final ParameterTool parameter;\n    protected final Function<RandomCutForest, LineTransformer> algorithmInitializer;\n    protected LineTransformer algorithm;\n    protected ShingleBuilder shingleBuilder;\n    protected double[] pointBuffer;\n    protected double[] shingleBuffer;\n    public AnomalyDetector(\n      ParameterTool parameter,\n      Function<RandomCutForest,LineTransformer> algorithmInitializer)\n    {\n      this.parameter = parameter;\n      this.algorithmInitializer = algorithmInitializer;\n    }\n    public List<String> run(Double[] values) {\n            if (pointBuffer == null) {\n                prepareAlgorithm(values.length);\n            }\n      return processLine(values);\n    }\n    protected void prepareAlgorithm(int dimensions) {\n---\n      RandomCutForest forest = RandomCutForest.builder()\n        .numberOfTrees(Integer.parseInt(\n          parameter.get(\"RcfNumberOfTrees\", \"50\")))\n        .sampleSize(Integer.parseInt(\n          parameter.get(\"RcfSampleSize\", \"8192\")))\n        .dimensions(shingleBuilder.getShingledPointSize())\n        .lambda(Double.parseDouble(\n          parameter.get(\"RcfLambda\", \"0.00001220703125\")))\n        .randomSeed(Integer.parseInt(\n          parameter.get(\"RcfRandomSeed\", \"42\")))\n      .build();\n---\n    algorithm = algorithmInitializer.apply(forest);\n  }\n```\ncode snippet 2: AnomalyDetector base class, which gets extended by the Streaming \nApplications main class\n\n```java\npublic class AnomalyJsonToTimestreamPayloadFn extends \n    RichMapFunction<String, List<TimestreamPoint>> {\n  protected final ParameterTool parameter;\n  private final Logger logger = \n\n  public AnomalyJsonToTimestreamPayloadFn(ParameterTool parameter) {\n    this.parameter = parameter;\n  }\n\n  // create new instance of StreamingJob for running our Forest\n  StreamingJob overallAnomalyRunner1;\n  StreamingJob overallAnomalyRunner2;\n  StreamingJob overallAnomalyRunner3;\n---\n\n  // use `open`method as RCF initialization\n  @Override\n  public void open(Configuration parameters) throws Exception {\n    overallAnomalyRunner1 = new StreamingJob(parameter);\n    overallAnomalyRunner2 = new StreamingJob(parameter);\n    overallAnomalyRunner3 = new StreamingJob(parameter);\n  super.open(parameters);\n}\n---\n```\ncode snippet 3: Mapping Function uses the Flink RichMapFunction `open` routine to \ninitialize 3 distinct `Random Cut Forests`\n\n### Data persistence – Flink data sinks\nOnce all anomalies are calculated we can decide where to send this data to. Flink provides\n various ready to use data sinks. In the examples provided here we fan out all \n (raw & processed) data to Amazon Kinesis Firehose for storing in S3 (long term)(5) and \n to Amazon Timestream (short term)(5). Firehose is configured with a small Lambda \n function to re-format data from json to csv and data is stored with automated \n partitioning to S3. A Timestream data sink does not come pre-bundled with Flink. \n Custom Timestream ingestion code is used in the examples provided here. Flink provides \n extensible Operator Interfaces for the creation of custom Map and Sink-Functions.\n \n### Timeseries handling\nFor the purpose of near real-time monitoring, Timestream in combination with Grafana is \nused. Grafana comes bundled with a Timestream data source plugin and allows to constantly \nquery & visualize Timestream data (6).\n\n\n",
+        "mode": "markdown"
+      },
+      "pluginVersion": "8.2.5",
+      "title": "README.md",
+      "type": "text"
+    },
+    {
+      "datasource": null,
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -201,10 +218,10 @@
         "overrides": []
       },
       "gridPos": {
-        "h": 5,
-        "w": 24,
+        "h": 15,
+        "w": 19,
         "x": 0,
-        "y": 7
+        "y": 10
       },
       "id": 16,
       "options": {
@@ -220,347 +237,99 @@
       "targets": [
         {
           "queryType": "raw",
-          "rawQuery": "SELECT CREATE_TIME_SERIES(time, measure_value::double) as xmeas_27 FROM \"kdaflink\".\"kinesisdata1\"\n    WHERE measure_name='xmeas_27' AND\n    time between ago(15m) and now()",
+          "rawQuery": "SELECT CREATE_TIME_SERIES(time, measure_value::double) as xmeas_1 FROM \"kdaflink\".\"kinesisdata1\"\n    WHERE measure_name='xmeas_1' AND\n    time between ago(15m) and now()",
           "refId": "A"
-        }
-      ],
-      "title": "Reactor feed",
-      "type": "timeseries"
-    },
-    {
-      "datasource": null,
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 0,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "auto",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 80
-              }
-            ]
-          }
         },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 6,
-        "w": 24,
-        "x": 0,
-        "y": 12
-      },
-      "id": 14,
-      "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "single"
-        }
-      },
-      "targets": [
         {
+          "hide": false,
           "queryType": "raw",
-          "rawQuery": "SELECT CREATE_TIME_SERIES(time, measure_value::double) as xmeas_26 FROM \"kdaflink\".\"kinesisdata1\"\n    WHERE measure_name='xmeas_26' AND\n    time between ago(15m) and now()",
-          "refId": "A"
-        }
-      ],
-      "title": "Stripper",
-      "type": "timeseries"
-    },
-    {
-      "datasource": null,
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 0,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "auto",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 80
-              }
-            ]
-          }
+          "rawQuery": "SELECT CREATE_TIME_SERIES(time, measure_value::double) as xmeas_2 FROM \"kdaflink\".\"kinesisdata1\"\n    WHERE measure_name='xmeas_2' AND\n    time between ago(15m) and now()",
+          "refId": "B"
         },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 5,
-        "w": 24,
-        "x": 0,
-        "y": 18
-      },
-      "id": 12,
-      "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "single"
-        }
-      },
-      "targets": [
         {
+          "hide": false,
           "queryType": "raw",
-          "rawQuery": "SELECT CREATE_TIME_SERIES(time, measure_value::double) as xmeas_25 FROM \"kdaflink\".\"kinesisdata1\"\n    WHERE measure_name='xmeas_25' AND\n    time between ago(15m) and now()",
-          "refId": "A"
-        }
-      ],
-      "title": "Panel Title",
-      "type": "timeseries"
-    },
-    {
-      "datasource": null,
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 0,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "auto",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 80
-              }
-            ]
-          }
+          "rawQuery": "SELECT CREATE_TIME_SERIES(time, measure_value::double) as xmeas_8 FROM \"kdaflink\".\"kinesisdata1\"\n    WHERE measure_name='xmeas_8' AND\n    time between ago(15m) and now()",
+          "refId": "D"
         },
-        "overrides": []
-      },
-      "gridPos": {
-        "h": 4,
-        "w": 24,
-        "x": 0,
-        "y": 23
-      },
-      "id": 10,
-      "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "single"
-        }
-      },
-      "targets": [
         {
+          "hide": false,
           "queryType": "raw",
-          "rawQuery": "SELECT CREATE_TIME_SERIES(time, measure_value::double) as xmeas_24 FROM \"kdaflink\".\"kinesisdata1\"\n    WHERE measure_name='xmeas_24' AND\n    time between ago(15m) and now()",
-          "refId": "A"
-        }
-      ],
-      "title": "Panel Title",
-      "type": "timeseries"
-    },
-    {
-      "datasource": null,
-      "fieldConfig": {
-        "defaults": {
-          "color": {
-            "mode": "palette-classic"
-          },
-          "custom": {
-            "axisLabel": "",
-            "axisPlacement": "auto",
-            "barAlignment": 0,
-            "drawStyle": "line",
-            "fillOpacity": 0,
-            "gradientMode": "none",
-            "hideFrom": {
-              "legend": false,
-              "tooltip": false,
-              "viz": false
-            },
-            "lineInterpolation": "linear",
-            "lineWidth": 1,
-            "pointSize": 5,
-            "scaleDistribution": {
-              "type": "linear"
-            },
-            "showPoints": "auto",
-            "spanNulls": false,
-            "stacking": {
-              "group": "A",
-              "mode": "none"
-            },
-            "thresholdsStyle": {
-              "mode": "off"
-            }
-          },
-          "mappings": [],
-          "thresholds": {
-            "mode": "absolute",
-            "steps": [
-              {
-                "color": "green",
-                "value": null
-              },
-              {
-                "color": "red",
-                "value": 80
-              }
-            ]
-          }
+          "rawQuery": "SELECT CREATE_TIME_SERIES(time, measure_value::double) as xmeas_6 FROM \"kdaflink\".\"kinesisdata1\"\n    WHERE measure_name='xmeas_6' AND\n    time between ago(15m) and now()",
+          "refId": "E"
         },
-        "overrides": [
-          {
-            "matcher": {
-              "id": "byName",
-              "options": "xmeas_23"
-            },
-            "properties": [
-              {
-                "id": "color",
-                "value": {
-                  "fixedColor": "super-light-purple",
-                  "mode": "fixed"
-                }
-              }
-            ]
-          }
-        ]
-      },
-      "gridPos": {
-        "h": 6,
-        "w": 24,
-        "x": 0,
-        "y": 27
-      },
-      "id": 8,
-      "options": {
-        "legend": {
-          "calcs": [],
-          "displayMode": "list",
-          "placement": "bottom"
-        },
-        "tooltip": {
-          "mode": "single"
-        }
-      },
-      "targets": [
         {
+          "hide": false,
           "queryType": "raw",
-          "rawQuery": "SELECT CREATE_TIME_SERIES(time, measure_value::double) as xmeas_23 FROM \"kdaflink\".\"kinesisdata1\"\n    WHERE measure_name='xmeas_23' AND\n    time between ago(15m) and now()\n    ",
-          "refId": "A"
+          "rawQuery": "SELECT CREATE_TIME_SERIES(time, measure_value::double) as xmeas_9 FROM \"kdaflink\".\"kinesisdata1\"\n    WHERE measure_name='xmeas_9' AND\n    time between ago(15m) and now()",
+          "refId": "F"
+        },
+        {
+          "hide": false,
+          "queryType": "raw",
+          "rawQuery": "SELECT CREATE_TIME_SERIES(time, measure_value::double) as xmeas_10 FROM \"kdaflink\".\"kinesisdata1\"\n    WHERE measure_name='xmeas_10' AND\n    time between ago(15m) and now()",
+          "refId": "G"
+        },
+        {
+          "hide": false,
+          "queryType": "raw",
+          "rawQuery": "SELECT CREATE_TIME_SERIES(time, measure_value::double) as xmeas_12 FROM \"kdaflink\".\"kinesisdata1\"\n    WHERE measure_name='xmeas_12' AND\n    time between ago(15m) and now()",
+          "refId": "I"
+        },
+        {
+          "hide": false,
+          "queryType": "raw",
+          "rawQuery": "SELECT CREATE_TIME_SERIES(time, measure_value::double) as xmeas_13 FROM \"kdaflink\".\"kinesisdata1\"\n    WHERE measure_name='xmeas_13' AND\n    time between ago(15m) and now()",
+          "refId": "J"
+        },
+        {
+          "hide": false,
+          "queryType": "raw",
+          "rawQuery": "SELECT CREATE_TIME_SERIES(time, measure_value::double) as xmeas_15 FROM \"kdaflink\".\"kinesisdata1\"\n    WHERE measure_name='xmeas_15' AND\n    time between ago(15m) and now()",
+          "refId": "L"
+        },
+        {
+          "hide": false,
+          "queryType": "raw",
+          "rawQuery": "SELECT CREATE_TIME_SERIES(time, measure_value::double) as xmeas_16 FROM \"kdaflink\".\"kinesisdata1\"\n    WHERE measure_name='xmeas_16' AND\n    time between ago(15m) and now()",
+          "refId": "C"
+        },
+        {
+          "hide": false,
+          "queryType": "raw",
+          "rawQuery": "SELECT CREATE_TIME_SERIES(time, measure_value::double) as xmeas_17 FROM \"kdaflink\".\"kinesisdata1\"\n    WHERE measure_name='xmeas_17' AND\n    time between ago(15m) and now()",
+          "refId": "H"
+        },
+        {
+          "hide": false,
+          "queryType": "raw",
+          "rawQuery": "SELECT CREATE_TIME_SERIES(time, measure_value::double) as xmeas_19 FROM \"kdaflink\".\"kinesisdata1\"\n    WHERE measure_name='xmeas_19' AND\n    time between ago(15m) and now()",
+          "refId": "K"
+        },
+        {
+          "hide": false,
+          "queryType": "raw",
+          "rawQuery": "SELECT CREATE_TIME_SERIES(time, measure_value::double) as xmeas_20 FROM \"kdaflink\".\"kinesisdata1\"\n    WHERE measure_name='xmeas_20' AND\n    time between ago(15m) and now()",
+          "refId": "M"
+        },
+        {
+          "hide": false,
+          "queryType": "raw",
+          "rawQuery": "SELECT CREATE_TIME_SERIES(time, measure_value::double) as xmeas_21 FROM \"kdaflink\".\"kinesisdata1\"\n    WHERE measure_name='xmeas_21' AND\n    time between ago(15m) and now()",
+          "refId": "N"
+        },
+        {
+          "hide": false,
+          "queryType": "raw",
+          "rawQuery": "SELECT CREATE_TIME_SERIES(time, measure_value::double) as xmeas_22 FROM \"kdaflink\".\"kinesisdata1\"\n    WHERE measure_name='xmeas_22' AND\n    time between ago(15m) and now()",
+          "refId": "O"
         }
       ],
-      "title": "Panel Title",
+      "title": "xmeas overview",
       "type": "timeseries"
     }
   ],
-  "refresh": false,
+  "refresh": "",
   "schemaVersion": 32,
   "style": "dark",
   "tags": [],
@@ -568,12 +337,12 @@
     "list": []
   },
   "time": {
-    "from": "now-15m",
+    "from": "now-5m",
     "to": "now"
   },
   "timepicker": {},
   "timezone": "",
-  "title": "TEP-SIM-DEV",
-  "uid": "cECfMqeGz",
-  "version": 5
+  "title": "TEP-SIM-DEV-2",
+  "uid": "cECfMqeGz22",
+  "version": 8
 }
