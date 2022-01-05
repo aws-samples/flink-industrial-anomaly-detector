@@ -124,7 +124,7 @@ public class StreamingJob extends AnomalyDetector {
 	private static FlinkKinesisFirehoseProducer<String> createFirehoseSinkFromStaticConfig(ParameterTool parameter) {
 
 		Properties outputProperties = new Properties();
-		outputProperties.setProperty(ConsumerConfigConstants.AWS_REGION, DEFAULT_REGION_NAME);
+		outputProperties.setProperty(ConsumerConfigConstants.AWS_REGION, parameter.get("KinesisRegion", DEFAULT_REGION_NAME));
 
 		FlinkKinesisFirehoseProducer<String> sink = new FlinkKinesisFirehoseProducer<>(parameter.get("SideCSVDeliveryStreamName", sideOutputDeliveryStreamName),
 				new SimpleStringSchema(), outputProperties);
