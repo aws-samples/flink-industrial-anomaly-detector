@@ -33,6 +33,8 @@ template_dist_dir="$template_dir/global-s3-assets"
 build_dist_dir="$template_dir/regional-s3-assets"
 source_dir="$template_dir/../src/flink-rcf-app"
 flink_app_base_name="tepFlinkAnomalyDetector-0.0.1-SNAPSHOT"
+tesim_docker_dir="$template_dir/../src/tesim-docker"
+tesim_docker_image_name="tesim-runner-01-rev-$git_revision.tar.gz"
 
 echo "------------------------------------------------------------------------------"
 echo "[Init] Clean old dist folders"
@@ -64,9 +66,11 @@ echo "--------------------------------------------------------------------------
 for template in $(find . -name "*.template"); do
   echo "  template=$template"
   sed -i -e "s/__S3_FLINK_APP_BUCKET_ARN__/arn:aws:s3:::$1-$4/g" \
-      -e "s/__FLINK_APPLICATION_S3_PATH__/$2\/$3\/$git_revision\/$flink_app_base_name-$git_revision.jar/g" $template
+         -e "s/__FLINK_APPLICATION_S3_PATH__/$2\/$3\/$git_revision\/$flink_app_base_name-$git_revision.jar/g" \
+         -e "s/__TESIM_DOCKER_IMAGE_S3_URL__/https:\/\/$1-$4.s3.amazonaws.com\/$2\/$3\/$git_revision\/$tesim_docker_image_name/g" \
+      $template
 done
-
+#https://artifacts-detect-real-time-anomalies-flink-us-east-1.s3.amazonaws.com/flink-anomaly-detect/v0.1/aa5967a/tesim-runner-01-rev-aa5967a.tar.gz
 echo "------------------------------------------------------------------------------"
 echo "[Packaging] Region Assets: Flink Application JAR"
 echo "------------------------------------------------------------------------------"
@@ -79,7 +83,15 @@ mvn clean package
 cp target/$flink_app_base_name.jar $build_dist_dir/$flink_app_base_name-$git_revision.jar
 
 
-cd $template_dir
+echo "------------------------------------------------------------------------------"
+echo "[Packaging] Region Assets: Tesim Docker Image tar.gz"
+echo "------------------------------------------------------------------------------"
+
+cd $tesim_docker_dir
+./build.sh
+docker save tesim-runner:01 | gzip > $tesim_docker_image_name
+mv $tesim_docker_image_name $build_dist_dir
+
 
 echo "------------------------------------------------------------------------------"
 echo "[Uploading] S3 Region Assets: Flink Application JAR"

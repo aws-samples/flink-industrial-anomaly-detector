@@ -25,6 +25,18 @@ echo $FLINK_START_CMD
 eval "$FLINK_START_CMD"
 
 echo
+echo "---FETCHING TESIM DOCKER IMAGE FROM S3 AND LOAD AS LOCAL IMAGE:"
+TESIM_IMAGE=$( \
+aws cloudformation describe-stacks \
+--stack-name $CFN_STACK_NAME \
+--query "Stacks[0].Outputs[?OutputKey=='07TesimDockerImageS3Url'].OutputValue" \
+--output text \
+)
+wget -O tesim-docker-image.tar.gz $TESIM_IMAGE
+docker load --input tesim-docker-image.tar.gz
+rm tesim-docker-image.tar.gz
+
+echo
 echo "---SETTING UP jq & yq"
 wget https://github.com/mikefarah/yq/releases/download/v4.16.2/yq_linux_amd64 && sudo mv yq_linux_amd64 /usr/bin/yq && sudo chmod 755 /usr/bin/yq
 sudo yum -y install jq

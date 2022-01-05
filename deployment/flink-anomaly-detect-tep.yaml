@@ -532,4 +532,7 @@ Outputs:
         - !Ref FlinkRCFApp
         - " "
         - "--run-configuration FlinkRunConfiguration={AllowNonRestoredState=true}"
+  07TesimDockerImageS3Url:
+    Description: tar.gz of tesim simulation docker image
+    Value: __TESIM_DOCKER_IMAGE_S3_URL__
 
