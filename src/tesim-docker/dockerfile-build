@@ -1,0 +1,40 @@
+FROM rockylinux/rockylinux:8.4
+
+COPY ./patch-linux.patch /patch-linux.patch
+
+RUN dnf -y install git wget curl && dnf -y group install "Development Tools" \
+&& dnf -y install epel-release boost boost-thread boost-devel \
+&& git clone https://github.com/rcandell/tesim.git \
+&& cd tesim \
+&& git checkout 01305110ed9b182e4340f3d85dcd690da415c9bc \
+&& mv /patch-linux.patch . \
+&& git apply patch-linux.patch \
+&& echo "ls -ltr --color=auto" > /usr/bin/ll \
+&& chmod 755 /usr/bin/ll \
+&& cd /tesim/c \
+&& g++ -Wfatal-errors \
+ -lboost_program_options -lboost_timer  -lboost_system -lboost_chrono -lboost_log -lrt -lboost_thread \
+ -DBOOST_LOG_DYN_LINK -lpthread -I./*.h  \
+ tesim_main.cpp TEADSInterface.cpp TEChannel.cpp TEController.cpp TEErrorFreeChannel.cpp \
+ TEGEErrorChannel.cpp  TEIIDErrorChannel.cpp TELogging.cpp TENames.cpp TEPlant.cpp TETimeSync.cpp \
+ TETypes.cpp ControlLoops.cpp PI.cpp teprob.cpp -o tesim
+
+RUN dnf -y install libcurl-devel openssl-devel libuuid-devel pulseaudio-libs-devel cmake3 \
+&& cd / \
+&& git clone -b 1.9.48 https://github.com/aws/aws-sdk-cpp/ --recursive \
+&& cmake3 -S aws-sdk-cpp -B aws-sdk-cpp/build -DBUILD_ONLY="kinesis" \
+-DBUILD_SHARED_LIBS=ON -DENABLE_TESTING=OFF -DENABLE_UNITY_BUILD=OFF \
+-DCMAKE_INSTALL_PREFIX=/aws/aws-sdk-cpp/ \
+&& cmake3 --build aws-sdk-cpp/build -j 5 \
+&& cmake3 --build aws-sdk-cpp/build --target install \
+&& rm -rf /aws-sdk-cpp \
+&& export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/aws/aws-sdk-cpp/lib64/ \
+&& ldconfig \
+&& cd /tesim/c \
+&& g++ -Wall -lboost_program_options -lboost_timer  -lboost_system -lboost_chrono -lboost_log -lrt \
+ -lboost_thread -DBOOST_LOG_DYN_LINK -lpthread -laws-cpp-sdk-kinesis -laws-cpp-sdk-core \
+ -I./*.h -I /aws/aws-sdk-cpp/include  -L /aws/aws-sdk-cpp/lib64/ TEController.cpp TEPlant.cpp PI.cpp \
+ ControlLoops.cpp teprob.cpp rtclient/rtclient.cpp -o rtclient/rtclient
+
+ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/aws/aws-sdk-cpp/lib64/
+WORKDIR /tesim/c

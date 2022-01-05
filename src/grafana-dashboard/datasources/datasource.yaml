@@ -1,0 +1,9 @@
+apiVersion: 1
+datasources:
+  - name: Timestream4TEP
+    type: grafana-timestream-datasource
+    jsonData:
+      authType: default
+      defaultRegion: <SET-VIA-C9_POSTINSTALL-SCRIPT>
+    editable: true
+    isDefault: true

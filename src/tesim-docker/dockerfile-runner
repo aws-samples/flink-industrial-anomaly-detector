@@ -1,0 +1,13 @@
+FROM rockylinux/rockylinux:8.4
+
+COPY libs/aws /aws
+COPY tesim /tesim/tesim
+COPY rtclient /tesim/rtclient
+COPY runner.sh /tesim/runner.sh
+
+ENV LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/aws/aws-sdk-cpp/lib64/
+
+RUN dnf -y install boost && ldconfig
+
+
+WORKDIR /tesim/

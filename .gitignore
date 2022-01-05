@@ -1,0 +1,13 @@
+*.csv
+src/tesim-docker/libs/
+src/tesim-docker/rtclient
+src/tesim-docker/tesim
+global-s3-assets
+regional-s3-assets
+.DS*
+target
+dependency-reduced*
+.classpath
+.settings
+.project
+.vscode

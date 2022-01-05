@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="icon" type="image/ico" href="https://a0.awsstatic.com/libra-css/images/site/fav/favicon.ico" /> 
+  	<link rel="shortcut icon" type="image/ico" href="https://a0.awsstatic.com/libra-css/images/site/fav/favicon.ico" /> 
+  	<link rel="apple-touch-icon" sizes="57x57" href="https://a0.awsstatic.com/libra-css/images/site/touch-icon-iphone-114-smile.png" /> 
+  	<link rel="apple-touch-icon" sizes="72x72" href="https://a0.awsstatic.com/libra-css/images/site/touch-icon-ipad-144-smile.png" /> 
+  	<link rel="apple-touch-icon" sizes="114x114" href="https://a0.awsstatic.com/libra-css/images/site/touch-icon-iphone-114-smile.png" /> 
+  	<link rel="apple-touch-icon" sizes="144x144" href="https://a0.awsstatic.com/libra-css/images/site/touch-icon-ipad-144-smile.png" /> 
+    <title>GG v2 Edge Dashboard</title>
+    <script src="https://cdn.jsdelivr.net/npm/moment"></script>
+	<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+	<script src="https://cdn.jsdelivr.net/npm/chartjs-adapter-moment"></script>
+</head>
+<style>
+#line-chart {
+  display: block;
+  width: 100%;
+}
+.loggr {
+  background-color: white;
+  
+  height: 30vh;
+  margin: 0;
+  overflow: scroll;
+  padding: 2rem;
+  color: black;
+  font: 0.7rem Inconsolata, monospace;
+}
+.row {
+  display: flex;
+  height: 50%;
+}
+
+.column {
+  flex: 50%;
+}
+.tesim {
+  background-color: white;
+  
+  height: 30vh;
+  margin: 0;
+  overflow: scroll;
+  padding: 2rem;
+  color: green;
+  font: 0.7rem Inconsolata, monospace;
+}
+</style>
+<body>
+	<div class="row">
+		<div class="column">
+  			<canvas id="line-chart"></canvas>
+  		</div>
+	</div>
+	<div class="row">
+  		<div class="column">
+  			<div class="tesim" id="tesim"></div>
+  		</div>
+  		<div class="column">
+  			<div class="loggr" id="realtimeLog"></div>
+  		</div>
+  		<div class="column">
+  			<div class="loggr" id="msgSize"></div>
+  		</div>
+	</div>
+	
+	
+    <script>
+    	var output = document.getElementById('tesim');
+    	
+		series = [];
+		const config = {
+		  type: 'bar',
+		  data: {
+			labels: [],
+			datasets: [{
+			  data: [],
+			  label: "Anomaly-Stream11",
+			  borderColor: "#3e95cd",
+			  backgroundColor: 'rgba(255, 99, 132, 0.4)',
+			  fill: false
+			},{
+			  data: [],
+			  label: "Anomaly-Stream9",
+			  borderColor: "#3e95cd",
+			  backgroundColor: 'rgba(217, 228, 44, 0.4)',
+			  fill: false
+			},{
+			  data: [],
+			  label: "Anomaly-Stream6",
+			  borderColor: "#3e95cd",
+			  backgroundColor: 'rgba(21, 212, 202, 0.4)',
+			  fill: false
+			}]
+		  },
+		  options: {
+			scales: {
+			  x: {
+				type: 'timeseries'
+				
+			  },
+			  title: {
+				display: true,
+			  }
+			}
+		  }
+		};
+		const ctx = document.querySelector("#line-chart").getContext('2d');
+		const chart = new Chart(ctx, config);
+		chart.options.animation = false;
+		
+		const fetchData = () => fetch('data')
+  			.then(data => data.json())
+  			.then(data => {
+  				console.log(createSeries(data));
+    			chart.data.datasets = createSeries(data);
+    			chart.update('none');
+   				setTimeout(fetchData, 5000); // Repeat every 5 sec
+  			});
+  		const fetchLog = () => fetch('tesim')
+  			.then(data => data.text())
+  			.then(data => {
+    			output.textContent = data;
+    			output.scrollTop = output.scrollHeight;
+    			setTimeout(fetchLog, 5000);
+  			});
+
+		function removeData(chart) {
+    		chart.data.labels.pop();
+    		chart.data.datasets.forEach((dataset) => {
+        		dataset.data.pop();
+    		});
+    		chart.update('none');
+		}
+		
+		Datasets = [{
+			  data: [],
+			  label: "Anomaly-Stream11",
+			  //borderColor: "#3e95cd",
+			  backgroundColor: 'rgba(255, 99, 132, 0.4)',
+			  fill: false
+			},{
+			  data: [],
+			  label: "Anomaly-Stream9",
+			  //borderColor: "#3e95cd",
+			  backgroundColor: 'rgba(217, 228, 44, 0.4)',
+			  fill: false
+			},{
+			  data: [],
+			  label: "Anomaly-Stream6",
+			  //borderColor: "#3e95cd",
+			  backgroundColor: 'rgba(21, 212, 202, 0.4)',
+			  fill: false
+			}];
+		const vizLimit = 50000;
+        const createSeries = jsonSeries => {
+    		//jsonSeries.shift();
+    		//jsonSeries.pop();
+    		var logContainer = document.getElementById("realtimeLog");
+    		var msg = document.getElementById("msgSize");
+            logContainer.innerHTML = "";
+            if ((Datasets[0].data.length + 
+            	Datasets[1].data.length +
+            	Datasets[2].data.length) > vizLimit) {
+            	removeData(chart);
+            	Datasets[0].data = [];
+            	Datasets[1].data = [];
+            	Datasets[2].data = [];
+            	msg.innerHTML = "reached vizlimit of "+vizLimit+" -->resetting viz...";
+            }
+            msg.innerHTML = Datasets[0].data.length + 
+            	Datasets[1].data.length +
+            	Datasets[2].data.length + " measurements in viz...";
+            for (var i = 0; i < jsonSeries.length; i++) {
+            	ts = new Date(parseFloat(jsonSeries[i].proc_time_ms))
+                entry1 = {x: ts.toISOString(), y: jsonSeries[i].anomaly_score_stream_11};
+                entry2 = {x: ts.toISOString(), y: jsonSeries[i].anomaly_score_stream9};
+                entry3 = {x: ts.toISOString(), y: jsonSeries[i].anomaly_score_stream6};
+                Datasets[0].data.push(entry1)
+                Datasets[1].data.push(entry2)
+                Datasets[2].data.push(entry3)
+                marker_start="";
+                marker_end="";
+                if (jsonSeries[i].anomaly_score_stream_11 > 2 
+                		|| jsonSeries[i].anomaly_score_stream9 > 2
+                		|| jsonSeries[i].anomaly_score_stream6 > 2) {
+                	marker_start = "<strong>"
+                	marker_end = "</strong>"
+                }
+                var div = document.createElement("div");
+                div.innerHTML =  marker_start+
+                ts.toISOString() + ' - Anomaly Stream6 : ' + jsonSeries[i].anomaly_score_stream6
+                +' - Anomaly Stream9 : ' + jsonSeries[i].anomaly_score_stream9
+                +' - Anomaly Stream11 : ' + jsonSeries[i].anomaly_score_stream_11
+                +marker_end;
+                logContainer.prepend(div);
+            }
+            return Datasets;
+        }
+		
+		fetchData();
+		fetchLog();
+    </script>
+</body>
+</html>
+
+
+
+
