@@ -61,9 +61,9 @@ echo
 echo "---SETTING UP MAVEN"
 
 echo "installing maven to /opt/maven..."
-wget https://dlcdn.apache.org/maven/maven-3/3.8.5/binaries/apache-maven-3.8.5-bin.tar.gz
+wget https://dlcdn.apache.org/maven/maven-3/3.8.6/binaries/apache-maven-3.8.6-bin.tar.gz
 sudo tar xf apache-maven-*.tar.gz -C /opt
-sudo ln -sf /opt/apache-maven-3.8.5 /opt/maven
+sudo ln -sf /opt/apache-maven-3.8.6 /opt/maven
 echo \
 'export JAVA_HOME=/usr/lib/jvm/jre-11-openjdk
 export M2_HOME=/opt/maven
